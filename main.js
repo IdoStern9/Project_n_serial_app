@@ -36,6 +36,9 @@ function createWindow() {
         // when you should delete the corresponding element.
         mainWindow = null
     })
+
+    // test print
+    console.log('test print');
 }
 
 // This method will be called when Electron has finished

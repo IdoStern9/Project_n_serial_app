@@ -10,9 +10,10 @@
             --text-color: #333;
             --border-radius: 8px;
             --box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            --font-family: 'Courier New', Courier, monospace; /* Set font family */
         }
         body, html {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: var(--font-family); /* Apply font family */
             margin: 0;
             padding: 0;
             background-color: var(--bg-color);
@@ -79,6 +80,17 @@
             max-height: 100%;
             position: relative;
         }
+        .header-line {
+            display: flex;
+            align-items: center;
+            justify-content: center; /* Center the title */
+            height: 20px; /* Adjust as needed */
+            color: #666; /* Set color for the header */
+            font-size: 16px; /* Set font size for the header */
+        }
+        .output-content {
+            padding-top: 20px; /* Adjust to include space for the header */
+        }
         .output h2 {
             position: absolute;
             top: 0;
@@ -105,13 +117,17 @@
         <button id="openPortButton">Open</button>
     </div>
     <div class="output-container">
-        <div id="diagnostics" class="output">
-            <h2>Diagnostics</h2>
-            <!-- Diagnostics content will go here -->
+        <div class="output" id="diagnostics-output">
+            <div class="header-line">Diagnostics</div>
+            <div id="diagnostics" class="output-content">
+                <!-- Diagnostics content will go here -->
+            </div>
         </div>
-        <div id="logs" class="output">
-            <h2>Logs</h2>
-            <!-- Logs content will go here, with colored text based on the message type -->
+        <div class="output" id="logs-output">
+            <div class="header-line">Logs</div>
+            <div id="logs" class="output-content">
+                <!-- Logs content will go here, with colored text based on the message type -->
+            </div>
         </div>
     </div>
 
