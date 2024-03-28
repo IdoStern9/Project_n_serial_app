@@ -3,63 +3,52 @@ const { decode } = require('@msgpack/msgpack');
 
 let port = null;
 let isOpen = false;
-async function openOrClosePort() 
-{
-    if (!isOpen) 
-    {
-        const selectedPortPath = document.getElementById('usbPorts').value;
-        if (selectedPortPath) 
-        {
-            try 
-            {
-                port = new SerialPort({ path: selectedPortPath, baudRate: 115200 });
-                port.on('data', (data) => 
-                {
-                    handleReceivedData(data);
-                });
-                port.on('open', () => 
-                {
-                    console.log('Serial port opened');
-                });
-                port.on('close', () => 
-                {
-                    console.log('Serial port closed');
-                    isOpen = false;
-                    document.getElementById('openPortButton').textContent = 'Open';
-                });
-                document.getElementById('error').textContent = ''; // Clear any previous error messages
-                document.getElementById('openPortButton').textContent = 'Close'; // Change button text
-                isOpen = true;
-            } 
-            catch (err) 
-            {
-                console.error('Error opening port:', err);
-                document.getElementById('error').textContent = err.message;
-                isOpen = false; // Ensure isOpen reflects the actual state
-            }
-        } 
-        else 
-        {
-            document.getElementById('error').textContent = 'Please select a USB port';
+
+// Buffer to accumulate data
+let accumulatedBuffer = Buffer.alloc(0); 
+
+async function openOrClosePort() {
+    const selectedPortPath = document.getElementById('usbPorts').value;
+    const errorDisplay = document.getElementById('error'); // Reference to the error display element
+    errorDisplay.textContent = ''; // Clear any previous error messages
+
+    if (!isOpen) {
+        if (selectedPortPath) {
+            initializePort(selectedPortPath); // Encapsulate port initialization logic
+        } else {
+            errorDisplay.textContent = 'Please select a USB port'; // Prompt user to select a port
         }
-    } 
-    else 
-    {
-        if (port && port.isOpen) 
-        {
-            try 
-            {
-                await port.close(); // This should trigger the 'close' event listener
-                // The 'close' event listener will handle setting isOpen to false and updating the button text
-            } 
-            catch (err) 
-            {
-                console.error('Error closing port:', err);
-                document.getElementById('error').textContent = err.message;
-            }
+    } else {
+        // Close the port if it is currently open
+        if (port && port.isOpen) {
+            await port.close(); // This triggers the 'close' event which resets the state
         }
     }
 }
+
+function initializePort(selectedPortPath) {
+    port = new SerialPort({ path: selectedPortPath, baudRate: 115200 });
+    port.on('data', handleReceivedData);
+    port.on('open', () => {
+        console.log('Serial port opened');
+        isOpen = true;
+        document.getElementById('openPortButton').textContent = 'Close';
+    });
+    port.on('close', () => {
+        console.log('Serial port closed');
+        isOpen = false;
+        document.getElementById('openPortButton').textContent = 'Open';
+        accumulatedBuffer = Buffer.alloc(0); // Reset the buffer
+        clearDiagnosticsDisplay(); // Clear diagnostics display
+    });
+}
+
+function clearDiagnosticsDisplay() {
+    const diagnosticsDiv = document.getElementById('diagnostics');
+    diagnosticsDiv.innerHTML = ''; // Clears the diagnostics display area
+}
+
+
 
 async function listSerialPorts() 
 {
@@ -98,42 +87,44 @@ async function listSerialPorts()
     }
 }
 
-// Buffer to accumulate data
-let accumulatedBuffer = Buffer.alloc(0);
-
 function handleReceivedData(data) {
     try {
-        // Accumulate incoming data
         accumulatedBuffer = Buffer.concat([accumulatedBuffer, data]);
 
-        let processData = true;
-        while (processData && accumulatedBuffer.length > 0) {
-            // Attempt to find the start indicator and ensure there's enough data to determine message size
+        while (accumulatedBuffer.length > 0) {
             const startIndicator = accumulatedBuffer.indexOf("---\n");
             if (startIndicator !== -1 && accumulatedBuffer.length > startIndicator + 8) {
-                // Extract size and check for complete MPack message
                 const sizeBytes = accumulatedBuffer.slice(startIndicator + 4, startIndicator + 8);
                 const size = sizeBytes.readUInt32LE(0);
-                
+
                 if (accumulatedBuffer.length >= startIndicator + 8 + size) {
-                    // We have a complete message, proceed with extracting and decoding
                     const messagePackData = accumulatedBuffer.slice(startIndicator + 8, startIndicator + 8 + size);
                     try {
                         const decodedData = decode(messagePackData);
                         updateDiagnosticsWindow(decodedData);
                     } catch (decodeError) {
                         console.error("Error decoding MessagePack data:", decodeError);
+                        // Handle decode error, e.g., by breaking out of the loop
+                        break;
                     }
-                    
-                    // Prepare buffer for next message
+
+                    // Adjust the buffer, assuming extra data handling is needed
                     accumulatedBuffer = accumulatedBuffer.slice(startIndicator + 8 + size);
+
+                    // Check for extra bytes beyond expected size
+                    if (accumulatedBuffer.length > 0 && accumulatedBuffer[0] !== expectedNextStartByte) {
+                        console.log("Warning: Extra data found. Handling it...");
+                        // Handle or log extra data scenario
+                        // E.g., reset the buffer or process the extra data as a new message
+                        accumulatedBuffer = Buffer.alloc(0); // Simplest approach: clear the buffer
+                    }
                 } else {
                     // Not enough data for a complete message, wait for more data
-                    processData = false;
+                    break;
                 }
             } else {
-                // No start indicator found or insufficient data to determine size
-                processData = false;
+                // No start indicator found or not enough data to include size info
+                break;
             }
         }
     } catch (error) {
@@ -141,15 +132,6 @@ function handleReceivedData(data) {
         const diagnosticsDiv = document.getElementById('diagnostics');
         diagnosticsDiv.appendChild(document.createTextNode(`Error: ${error.message}`));
     }
-}
-
-function updateLogsWindow(text) 
-{
-    const logsDiv = document.getElementById('logs');
-    // Append new log data without clearing existing logs
-    const logEntry = document.createElement('div');
-    logEntry.textContent = text;
-    logsDiv.appendChild(logEntry);
 }
 
 // Round all float values in the decoded data to 3 decimal places
