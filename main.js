@@ -7,6 +7,7 @@ const url = require('url'); // Correct import of the url module
 let mainWindow
 
 function createWindow() {
+
     // Create the browser window.
     mainWindow = new BrowserWindow({
         width: 800,

@@ -1,8 +1,154 @@
 const { SerialPort } = require('serialport');
 const { decode } = require('@msgpack/msgpack');
 
+function bytesToInt(bytearray, endian = 'little') {
+    let result = 0;
+    if (endian === 'little') {
+        for (let i = 0; i < bytearray.length; i++) {
+            result += bytearray[i] << (i * 8);
+        }
+    } else {
+        for (let i = 0; i < bytearray.length; i++) {
+            result += bytearray[i] << ((bytearray.length - i - 1) * 8);
+        }
+    }
+    return result;
+}
+
+function printBuffer(buffer) {
+    let result = '';
+    for (let i = 0; i < buffer.length; i++) {
+        // if the byte is a printable ASCII character, append it to the result
+        if (buffer[i] >= 32 && buffer[i] <= 126) {
+            result += String.fromCharCode(buffer[i]);
+        } else {
+            // otherwise append as a hex value
+            result += `\\0x${buffer[i].toString(16).padStart(2, '0')}`;
+        }
+    }
+    console.log(result);
+}
+
+function readLine(buffer) {
+    const lineBreakIndex = buffer.indexOf(10);
+    if (lineBreakIndex !== -1) {
+        // Extract line from buffer and remove it
+        const line = buffer.splice(0, lineBreakIndex + 1);
+
+        return Buffer.from(line).toString();
+    }
+    return null;
+}
+
+function readBytes(buffer, length) {
+    if (buffer.length >= length) {
+        // Extract data from buffer
+        const data = buffer.splice(0, length);
+        return data;
+    }
+    return null;
+}
+
+function peekLine(buffer) {
+    const lineBreakIndex = buffer.indexOf(10);
+    if (lineBreakIndex !== -1) {
+        // Extract line from buffer without removing it
+        const line = buffer.slice(0, lineBreakIndex + 1);
+        return Buffer.from(line).toString();
+    }
+    return null;
+}
+
+function peekBytes(buffer, length) {
+    if (buffer.length >= length) {
+        // Extract data from buffer without removing it
+        const data = buffer.slice(0, length);
+        return data;
+    }
+    return null;
+}
+
+class SerialHandler {
+    constructor() {
+        this.buffer = [];
+    }
+
+    handle(data) {
+        // Accumulate received data in the internal buffer
+        this.buffer.push(...data);
+
+        // Process the received data
+        this.handleReceivedData();
+    }
+
+    onDataReceived(callback) {
+        this.onDataReceivedCallback = callback;
+    }
+
+    handleReceivedData(){
+        
+        // read line from buffer until there are no more complete lines
+        while (true) {
+            let line = peekLine(this.buffer);
+            if (line === null) {
+                break;
+            }
+    
+            // is the line a diagnostic message start indicator?
+            if (line.includes("---")) {
+    
+                // find start of frame size
+                let startIndicatorIndex = this.buffer.indexOf(10) + 1;
+                
+                // peek the next 4 bytes to get the size of the message
+                let sizeBytes = peekBytes(this.buffer.slice(startIndicatorIndex), 4);
+                if (sizeBytes === null) {
+                    break;
+                }
+    
+                // get the size of the message
+                let size = bytesToInt(sizeBytes);
+    
+                // try to read the message
+                let message = readBytes(this.buffer.slice(startIndicatorIndex + 4), size);
+                if (message === null) {
+                    break;
+                }
+    
+                // advance the buffer
+                this.buffer = this.buffer.slice(8 + size);
+    
+                // decode the message
+                try {
+                    const decodedData = decode(message);
+                    updateDiagnosticsWindow(decodedData);
+                } catch (decodeError) {
+                    console.error("Error decoding MessagePack data:", decodeError);
+                }
+            }
+            else {
+    
+                // read log message
+                let logMessage = readLine(this.buffer);
+                if (logMessage === null) {
+                    break;
+                }
+    
+                // add a newline to the log message
+                logMessage += '\n';
+    
+                // update the logs window
+                updateLogsWindow(logMessage);
+            }
+        }
+    }
+}
+
 let port = null;
 let isOpen = false;
+
+const serialHandler = new SerialHandler();
+
 async function openOrClosePort() 
 {
     if (!isOpen) 
@@ -15,7 +161,7 @@ async function openOrClosePort()
                 port = new SerialPort({ path: selectedPortPath, baudRate: 115200 });
                 port.on('data', (data) => 
                 {
-                    handleReceivedData(data);
+                    serialHandler.handle(data);
                 });
                 port.on('open', () => 
                 {
@@ -30,6 +176,7 @@ async function openOrClosePort()
                 document.getElementById('error').textContent = ''; // Clear any previous error messages
                 document.getElementById('openPortButton').textContent = 'Close'; // Change button text
                 isOpen = true;
+
             } 
             catch (err) 
             {
@@ -66,7 +213,6 @@ async function listSerialPorts()
     try 
     {
         const ports = await SerialPort.list();
-        console.log('ports', ports);
 
         const usbPortsSelect = document.getElementById('usbPorts');
         usbPortsSelect.innerHTML = ''; // Clear existing options
@@ -101,55 +247,64 @@ async function listSerialPorts()
 // Buffer to accumulate data
 let accumulatedBuffer = Buffer.alloc(0);
 
-function handleReceivedData(data) {
-    try {
-        // Accumulate incoming data
-        accumulatedBuffer = Buffer.concat([accumulatedBuffer, data]);
+// function handleReceivedData(data) {
+//     try {
+//         // Accumulate incoming data
+//         accumulatedBuffer = Buffer.concat([accumulatedBuffer, data]);
 
-        let processData = true;
-        while (processData && accumulatedBuffer.length > 0) {
-            // Attempt to find the start indicator and ensure there's enough data to determine message size
-            const startIndicator = accumulatedBuffer.indexOf("---\n");
-            if (startIndicator !== -1 && accumulatedBuffer.length > startIndicator + 8) {
-                // Extract size and check for complete MPack message
-                const sizeBytes = accumulatedBuffer.slice(startIndicator + 4, startIndicator + 8);
-                const size = sizeBytes.readUInt32LE(0);
+//         let processData = true;
+//         while (processData && accumulatedBuffer.length > 0) {
+//             // Attempt to find the start indicator and ensure there's enough data to determine message size
+//             const startIndicator = accumulatedBuffer.indexOf("---\n");
+//             if (startIndicator !== -1 && accumulatedBuffer.length > startIndicator + 8) {
+//                 // Extract size and check for complete MPack message
+//                 const sizeBytes = accumulatedBuffer.slice(startIndicator + 4, startIndicator + 8);
+//                 const size = sizeBytes.readUInt32LE(0);
                 
-                if (accumulatedBuffer.length >= startIndicator + 8 + size) {
-                    // We have a complete message, proceed with extracting and decoding
-                    const messagePackData = accumulatedBuffer.slice(startIndicator + 8, startIndicator + 8 + size);
-                    try {
-                        const decodedData = decode(messagePackData);
-                        updateDiagnosticsWindow(decodedData);
-                    } catch (decodeError) {
-                        console.error("Error decoding MessagePack data:", decodeError);
-                    }
+//                 if (accumulatedBuffer.length >= startIndicator + 8 + size) {
+//                     // We have a complete message, proceed with extracting and decoding
+//                     const messagePackData = accumulatedBuffer.slice(startIndicator + 8, startIndicator + 8 + size);
+//                     try {
+//                         const decodedData = decode(messagePackData);
+//                         updateDiagnosticsWindow(decodedData);
+//                     } catch (decodeError) {
+//                         console.error("Error decoding MessagePack data:", decodeError);
+//                     }
                     
-                    // Prepare buffer for next message
-                    accumulatedBuffer = accumulatedBuffer.slice(startIndicator + 8 + size);
-                } else {
-                    // Not enough data for a complete message, wait for more data
-                    processData = false;
-                }
-            } else {
-                // No start indicator found or insufficient data to determine size
-                processData = false;
-            }
-        }
-    } catch (error) {
-        console.error('Error handling received data:', error);
-        const diagnosticsDiv = document.getElementById('diagnostics');
-        diagnosticsDiv.appendChild(document.createTextNode(`Error: ${error.message}`));
-    }
-}
+//                     // Prepare buffer for next message
+//                     accumulatedBuffer = accumulatedBuffer.slice(startIndicator + 8 + size);
+//                 } else {
+//                     // Not enough data for a complete message, wait for more data
+//                     processData = false;
+//                 }
+//             } else {
+//                 // No start indicator found or insufficient data to determine size
+//                 processData = false;
+//             }
+//         }
+//     } catch (error) {
+//         console.error('Error handling received data:', error);
+//         const diagnosticsDiv = document.getElementById('diagnostics');
+//         diagnosticsDiv.appendChild(document.createTextNode(`Error: ${error.message}`));
+//     }
+// }
+
 
 function updateLogsWindow(text) 
 {
     const logsDiv = document.getElementById('logs');
-    // Append new log data without clearing existing logs
-    const logEntry = document.createElement('div');
-    logEntry.textContent = text;
-    logsDiv.appendChild(logEntry);
+
+    // create a <div> element for the new log message
+    const logDiv = document.createElement('div');
+
+    // set the text content of the <div>
+    logDiv.textContent = text + '\n';
+
+    // append the <div> to the logs window
+    logsDiv.appendChild(logDiv);
+
+    // // Scroll to the bottom of the logs window
+    // logsDiv.scrollTop = logsDiv.scrollHeight;
 }
 
 // Round all float values in the decoded data to 3 decimal places
@@ -185,6 +340,7 @@ function updateDiagnosticsWindow(decodedData)
 
 // file system module  
 const fs = require('fs');
+const { log } = require('console');
 const log_to_file_enabled = true;
 
 // Log to file
